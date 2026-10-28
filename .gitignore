@@ -1,0 +1,23 @@
+# Built site (made by tools/build_site.py, deployed by the Pages workflow)
+_site/
+
+# Never commit recordings: session folders, videos and exports contain patient data.
+*.mp4
+*.webm
+*.mov
+samples_long.csv
+samples_wide_10Hz.csv
+events.csv
+step_summary.csv
+session.json
+comments.csv
+analysis/
+*_session.json
+*_samples_*.csv
+*_events.csv
+*_comments.csv
+
+# Local tooling
+.claude/
+.DS_Store
+__pycache__/

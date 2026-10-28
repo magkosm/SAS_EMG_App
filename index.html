@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M40 Neck EMG Logger</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <div class="brand-name">M40 Neck EMG Logger</div>
+        <div class="brand-sub">SCM · TRP upper · TRP ins</div>
+      </div>
+    </div>
+
+    <div class="seg mode-switch" id="modeSwitch" role="tablist" aria-label="Mode">
+      <button data-view="record" class="active">● Record</button>
+      <button data-view="replay">▶ Replay</button>
+      <button data-view="analysis">◧ Analysis</button>
+    </div>
+
+    <div class="session-controls">
+      <label class="field inline">
+        <span>Subject / session ID</span>
+        <input id="subject" type="text" placeholder="e.g. P01_T1" autocomplete="off">
+      </label>
+      <div class="session-clock" id="sessionClock" aria-live="polite">--:--</div>
+      <div class="rec-badge" id="recBadge" hidden><span class="rec-dot"></span><span id="recText">REC</span></div>
+      <button class="btn primary" id="btnSession">Start session</button>
+    </div>
+
+    <button class="btn ghost icon" id="btnTheme" title="Toggle light/dark">◐</button>
+  </header>
+
+  <main class="layout" id="recordView">
+    <!-- LEFT: workflow -->
+    <section class="workflow">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="setup" class="active">1 · Sensors</button>
+        <button role="tab" data-tab="calib">2 · Calibrate</button>
+        <button role="tab" data-tab="protocol">3 · Protocol</button>
+        <button role="tab" data-tab="results">4 · Results</button>
+      </nav>
+      <div class="tab-body" id="tab-setup"></div>
+      <div class="tab-body" id="tab-calib" hidden></div>
+      <div class="tab-body" id="tab-protocol" hidden></div>
+      <div class="tab-body" id="tab-results" hidden></div>
+    </section>
+
+    <!-- RIGHT: live -->
+    <section class="live">
+      <div class="live-top">
+        <div class="cam-wrap">
+          <video id="camPreview" autoplay muted playsinline></video>
+          <div class="cam-empty" id="camEmpty"><div>Camera off<br><small>Turn it on in “1 · Sensors”</small></div></div>
+          <div class="cam-overlay" id="camOverlay"></div>
+        </div>
+        <div class="now-panel">
+          <div class="now-step" id="nowStep">
+            <div class="now-label">No step running</div>
+          </div>
+          <div class="tiles" id="tiles"></div>
+        </div>
+      </div>
+
+      <div class="chart-controls">
+        <div class="seg" id="segMode" role="group" aria-label="Display unit">
+          <button data-mode="raw" class="active">Raw (0–1000)</button>
+          <button data-mode="mvc">% MVC</button>
+          <button data-mode="rest">× Rest</button>
+        </div>
+        <label class="field inline small">
+          <span>Window</span>
+          <select id="selWindow">
+            <option value="10">10 s</option>
+            <option value="30" selected>30 s</option>
+            <option value="60">60 s</option>
+            <option value="120">2 min</option>
+          </select>
+        </label>
+        <label class="field inline small">
+          <span>Smoothing</span>
+          <select id="selSmooth">
+            <option value="1">off</option>
+            <option value="3">0.3 s</option>
+            <option value="5" selected>0.5 s</option>
+            <option value="10">1.0 s</option>
+          </select>
+        </label>
+        <label class="check small"><input type="checkbox" id="chkAuto" checked> Auto-scale</label>
+        <button class="btn ghost small" id="btnPause">Pause view</button>
+      </div>
+
+      <div class="strips" id="strips">
+        <div class="strips-empty" id="stripsEmpty">
+          <p>No sensors connected.</p>
+          <p class="muted">Turn on each M40 (LED pulses like a heartbeat), then press <b>Add M40 sensor</b>.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- REPLAY: a recorded session, video and EMG in sync -->
+  <main class="rv-layout" id="replayView" hidden>
+    <aside class="rv-side">
+      <div class="rv-side-head">
+        <div class="seg" id="rvSideTabs" role="tablist">
+          <button data-side="steps" class="active">Steps</button>
+          <button data-side="comments">Comments <span id="rvCommentCount" class="num"></span></button>
+        </div>
+        <button class="btn small ghost" id="rvBack" title="Open another session">Open other…</button>
+      </div>
+      <ol class="rv-steps" id="rvSteps"></ol>
+      <div class="rv-comments" id="rvComments" hidden></div>
+      <div class="rv-info" id="rvInfo"></div>
+    </aside>
+
+    <section class="rv-content">
+      <div class="rv-top">
+        <div class="cam-wrap rv-video">
+          <video id="rvVideo" playsinline></video>
+          <div class="cam-empty" id="rvNoVideo"><div>No video in this session<br><small>EMG plays on its own clock</small></div></div>
+          <div class="cam-overlay" id="rvVideoNote"></div>
+        </div>
+        <div class="rv-panel">
+          <div class="now-step">
+            <div class="now-label" id="rvTitle">–</div>
+            <div class="now-title" id="rvStepTitle">–</div>
+            <div class="now-label" id="rvStepLabel">–</div>
+            <div class="now-meta">
+              <span>Session <b id="rvTime">0:00.0</b></span>
+              <span>Rep <b id="rvRep">–</b></span>
+            </div>
+          </div>
+          <div class="rv-transport">
+            <button class="btn" id="rvPrevStep" title="Previous step (PageUp)">⏮</button>
+            <button class="btn" id="rvPrevRep" title="Previous rep ([)">◀ rep</button>
+            <button class="btn primary rv-play" id="rvPlay" title="Play/pause (Space)">▶</button>
+            <button class="btn" id="rvNextRep" title="Next rep (])">rep ▶</button>
+            <button class="btn" id="rvNextStep" title="Next step (PageDown)">⏭</button>
+            <select id="rvRate" title="Playback speed">
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+            </select>
+          </div>
+          <form class="rv-comment-bar" id="rvCommentForm" autocomplete="off">
+            <input type="text" id="rvCommentText" placeholder="Comment at the playhead…  (C)">
+            <button class="btn primary small" id="rvCommentAdd" type="submit">Add at 0:00.0</button>
+          </form>
+          <div class="tiles" id="rvTiles"></div>
+        </div>
+      </div>
+
+      <div class="chart-controls">
+        <div class="seg" id="rvMode" role="group" aria-label="Display unit">
+          <button data-mode="raw" class="active">Raw (0–1000)</button>
+          <button data-mode="mvc">% MVC</button>
+          <button data-mode="rest">× Rest</button>
+        </div>
+        <label class="field inline small">
+          <span>Window</span>
+          <select id="rvWindow">
+            <option value="10">10 s</option>
+            <option value="20" selected>20 s</option>
+            <option value="60">60 s</option>
+            <option value="180">3 min</option>
+          </select>
+        </label>
+        <label class="check small"><input type="checkbox" id="rvMirror"> Mirror video</label>
+        <span class="rv-sync small">
+          Video sync
+          <button class="btn small ghost" id="rvSyncMinus" title="Video 0.1 s earlier">−0.1</button>
+          <b id="rvSync" class="num">+0.0 s</b>
+          <button class="btn small ghost" id="rvSyncPlus" title="Video 0.1 s later">+0.1</button>
+        </span>
+        <span class="tiny rv-keys"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 1 s · <kbd>[</kbd><kbd>]</kbd> rep · <kbd>PgUp</kbd><kbd>PgDn</kbd> step · <kbd>C</kbd> comment</span>
+      </div>
+
+      <div class="rv-overview"><canvas id="rvOverview"></canvas></div>
+      <div class="strips" id="rvStrips"></div>
+    </section>
+  </main>
+
+  <section class="rv-empty" id="replayEmpty" hidden>
+    <div class="rv-drop" id="rvDrop">
+      <h2>Replay a recorded session</h2>
+      <p class="muted">Choose the session folder (it holds <code>session.json</code>, <code>samples_long.csv</code>, <code>events.csv</code> and the video),
+        or your save folder to pick from all sessions.<br>You can also drop the folder or its files here, including downloaded copies.</p>
+      <div class="btn-row" style="justify-content:center">
+        <button class="btn primary" id="rvOpenFolder">Open folder…</button>
+        <button class="btn" id="rvOpenFiles">Select files…</button>
+        <input type="file" id="rvFileInput" multiple hidden>
+      </div>
+      <p class="tiny rv-privacy">🔒 Files are opened in this browser only. Nothing is uploaded, also when the app runs from a website.</p>
+      <div id="rvRecent"></div>
+    </div>
+  </section>
+
+  <!-- ANALYSIS: groupings per exercise, activations, rep-locked stacks, behaviour clusters -->
+  <main class="an-layout" id="analysisView" hidden></main>
+  <section class="rv-empty" id="analysisEmpty" hidden>
+    <div class="rv-drop">
+      <h2>Analyse a recorded session</h2>
+      <p class="muted">Open a session folder or its files. Analysis uses the same session as Replay, so a session already open there is analysed straight away.</p>
+      <div class="btn-row" style="justify-content:center">
+        <button class="btn primary" id="anOpenFolder">Open folder…</button>
+        <button class="btn" id="anOpenFiles">Select files…</button>
+      </div>
+      <p class="tiny rv-privacy">🔒 Files are opened in this browser only. Nothing is uploaded, also when the app runs from a website.</p>
+    </div>
+  </section>
+
+  <div class="boot-error" id="bootError" hidden>
+    <b>The app did not load completely.</b>
+    Press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>R</kbd> to reload. If that does not help, close the tab and start the app with
+    <code>start.command</code>, so it runs at http://localhost:8040, not as a file.
+    <div class="tiny" id="bootErrorDetail"></div>
+  </div>
+
+  <div class="toast-host" id="toasts" aria-live="polite"></div>
+
+  <script>
+    // If the app modules fail to load (stale cache, opened as a file), say so instead of showing dead buttons.
+    window.addEventListener('error', function (e) {
+      if (!window.__appReady) document.getElementById('bootErrorDetail').textContent = e.message || '';
+    });
+    setTimeout(function () {
+      if (!window.__appReady) document.getElementById('bootError').hidden = false;
+    }, 4000);
+  </script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
