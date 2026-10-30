@@ -6,7 +6,8 @@
 
 import { state, on, emit } from './state.js';
 import { analyse, DEFAULTS } from './analysis.js';
-import { getSessionForAnalysis, openFolderDialog, openFilesDialog } from './replay.js';
+import { getSessionForAnalysis, openFolderDialog, openFilesDialog, renderBrowserSessions } from './replay.js';
+import { canShareFiles, shareFiles } from './platform.js';
 import { h, $, fmtNum, cssVar, niceCeil, csvRow, downloadBlob, toast, fmtClock } from './util.js';
 
 const an = { opts: { ...DEFAULTS }, res: null, sessId: null, sess: null, stackStep: null, highlight: 'all' };
@@ -486,7 +487,7 @@ function card(title, help, body) {
 function render() {
   if (!isShown()) return;
   const view = $('#analysisView'), empty = $('#analysisEmpty');
-  if (!an.sess || !an.res) { view.hidden = true; empty.hidden = false; return; }
+  if (!an.sess || !an.res) { view.hidden = true; empty.hidden = false; renderBrowserSessions($('#anRecent')); return; }
   empty.hidden = true;
   view.hidden = false;
   const scrollTop = view.scrollTop;
@@ -579,7 +580,13 @@ async function exportAll() {
       toast('Could not write to the session folder (' + err.message + '). Downloading instead.', 'bad');
     }
   }
-  Object.entries(files).forEach(([n, blob], i) => setTimeout(() => downloadBlob(blob, `${an.sess.id}_${n}`), i * 350));
+  // Phones/tablets: one share sheet for all files (Save to Files, AirDrop…); otherwise download each.
+  const asFiles = Object.entries(files).map(([n, blob]) => new File([blob], `${an.sess.id}_${n}`, { type: blob.type }));
+  if (canShareFiles(asFiles)) {
+    try { if (await shareFiles(asFiles, `${an.sess.id} analysis`)) return; } catch (err) { toast('Share failed: ' + err.message, 'bad'); }
+    return;
+  }
+  asFiles.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 350));
 }
 
 // ---- Init --------------------------------------------------------------------------------------------------

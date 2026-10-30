@@ -7,8 +7,35 @@ import { csvRow, stamp, safeName, downloadBlob, toast } from './util.js';
 import { ACTIVE_SD } from './processing.js';
 import { dejitter } from './timing.js';
 import { folder, ensureFolderPermission } from './folder.js';
+import { putSession, requestPersistence } from './store.js';
 
 export const APP_VERSION = '1.0.0';
+
+// ---- Screen awake + background detection ------------------------------------
+// Phones and tablets (Bluefy on iOS especially) pause Bluetooth when the screen locks or the app
+// goes to the background. Keep the screen on during a session and log when the page was hidden.
+
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && 'wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch { /* not supported or not allowed */ }
+}
+document.addEventListener('visibilitychange', () => {
+  if (!state.session?.active) return;
+  if (document.visibilityState === 'hidden') logEvent('app_hidden');
+  else {
+    logEvent('app_visible');
+    keepAwake(true);
+    toast('The app was in the background. Bluetooth may have paused; check the sensor tiles.', 'bad', 7000);
+  }
+});
 
 // ---- Logging -------------------------------------------------------------
 
@@ -92,9 +119,37 @@ export async function startSession({ subject, recordVideo }) {
     ss.autosave = setInterval(() => {
       if (!ss.autosaving) ss.autosaving = writeDataFiles(ss).catch(() => {}).finally(() => { ss.autosaving = null; });
     }, 30000);
+  } else {
+    // No folder (phone, tablet, Bluefy…): keep a copy in this browser, data every 30 s, video at the end.
+    requestPersistence();
+    ss.autosave = setInterval(() => {
+      if (!ss.autosaving) ss.autosaving = storeInBrowser(ss, buildDataFiles(ss), false).finally(() => { ss.autosaving = null; });
+    }, 30000);
   }
+  keepAwake(true);
   emit('session');
   return ss;
+}
+
+// Copy of the session in IndexedDB (see store.js). Returns true when stored.
+async function storeInBrowser(ss, files, complete) {
+  try {
+    rememberSensors(ss);
+    await putSession({
+      id: ss.id,
+      subject: ss.subject,
+      started: ss.wallStart.toISOString(),
+      duration: ((ss.t1 ?? clock()) - ss.t0),
+      steps: sessionAttempts(ss).filter((a) => !a.superseded).length,
+      hasVideo: !!ss.video,
+      complete,
+      files,
+    });
+    return true;
+  } catch (err) {
+    if (complete) toast('Could not keep a copy in this browser (' + (err.message || 'storage full') + '). Use Share or the download buttons in Results.', 'bad', 9000);
+    return false;
+  }
 }
 
 function rememberSensors(ss) {
@@ -141,6 +196,11 @@ export async function stopSession() {
     }
   } else {
     Object.assign(ss.files, buildDataFiles(ss));
+  }
+  keepAwake(false);
+  if (!ss.saved) {
+    ss.storedInBrowser = await storeInBrowser(ss, { ...ss.files }, true);
+    if (ss.storedInBrowser) toast('Session kept in this browser. Share or download it from Results, or open it in Replay.');
   }
   emit('session');
 }

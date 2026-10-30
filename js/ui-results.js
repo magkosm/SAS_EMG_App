@@ -5,7 +5,8 @@ import { STEPS } from './protocol.js';
 import { unitFor, statIn, UNIT_LABEL, UNIT_DIGITS } from './processing.js';
 import { sessionAttempts, buildDataFiles, downloadSessionFile } from './session.js';
 import { folder } from './folder.js';
-import { h, $, fmtClock, fmtNum, downloadBlob, fill } from './util.js';
+import { canShareFiles, shareFiles } from './platform.js';
+import { h, $, fmtClock, fmtNum, downloadBlob, fill, toast } from './util.js';
 
 const root = () => $('#tab-results');
 const prefs = { metric: 'mean' };
@@ -64,15 +65,21 @@ function files(ss) {
     return h('div', {},
       h('p', { class: 'muted' }, ss.dir
         ? ['Recording to ', h('b', {}, `${folder.name}/${ss.id}`), '. Data files autosave every 30 s; the video file is finalised when you stop.']
-        : 'Recording in memory. Stop the session to download the files.'),
+        : 'Recording in this browser. Data is backed up here every 30 s; stop the session to share or download the files.'),
       h('button', { class: 'btn small', onclick: () => {
         const f = buildDataFiles(ss);
         downloadBlob(f['samples_long.csv'], `${ss.id}_samples_long_partial.csv`);
       } }, 'Download data so far'));
   }
   const names = Object.keys(ss.files);
+  const asFiles = () => names.map((n) => new File([ss.files[n]], `${ss.id}_${n}`, { type: ss.files[n].type }));
+  const shareable = names.length && canShareFiles(asFiles());
   return h('div', {},
     ss.saved ? h('div', { class: 'callout' }, '✓ Saved to ', h('b', {}, `${folder.name}/${ss.id}/`)) : null,
+    ss.storedInBrowser ? h('div', { class: 'callout' }, '✓ Kept in this browser on this device. It stays listed in Replay and Analysis until you delete it there.') : null,
+    shareable ? h('div', { class: 'btn-row', style: { marginTop: '10px' } },
+      h('button', { class: 'btn primary', onclick: () => shareFiles(asFiles(), ss.id).catch((e) => toast('Share failed: ' + e.message, 'bad')) }, '⇪ Share / Save to Files…'),
+      h('span', { class: 'tiny' }, 'All files at once: Save to Files, AirDrop, Mail…')) : null,
     h('div', { class: 'btn-row', style: { marginTop: '10px' } },
       h('button', { class: 'btn primary', onclick: () => emit('openReplay', ss) }, '▶ Replay this session'),
       h('button', { class: 'btn', onclick: () => emit('openAnalysis', ss) }, '◧ Analyse this session')),

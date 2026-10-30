@@ -23,10 +23,13 @@ export async function listCameras() {
   return all.filter((d) => d.kind === 'videoinput');
 }
 
-export async function openCamera({ deviceId = '', audio = false, height = 720 } = {}) {
+// facingMode: 'environment' = back camera (phones/tablets filming the patient), 'user' = front/webcam.
+export async function openCamera({ deviceId = '', audio = false, height = 720, facingMode = '' } = {}) {
   closeCamera();
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('this browser gives web pages no camera access');
   const video = { height: { ideal: height }, frameRate: { ideal: 30 } };
   if (deviceId) video.deviceId = { exact: deviceId };
+  else if (facingMode) video.facingMode = { ideal: facingMode };
   cam.stream = await navigator.mediaDevices.getUserMedia({ video, audio });
   cam.deviceId = deviceId;
   cam.audio = audio;

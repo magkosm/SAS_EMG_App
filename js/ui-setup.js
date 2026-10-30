@@ -8,9 +8,11 @@ import { listCameras, openCamera, closeCamera, cam, cameraLabel } from './record
 import { folder, folderSupported, chooseFolder, forgetFolder } from './folder.js';
 import { h, $, toast, fmtNum, fill } from './util.js';
 import { runProbe } from './probe.js';
+import { isIOS, isMobile, isBluefy, BLUEFY_APP_URL } from './platform.js';
 
 const root = () => $('#tab-setup');
-export const camPrefs = { record: true, audio: false, mirror: true };
+// Phones/tablets film the patient with the back camera, so no mirroring there by default.
+export const camPrefs = { record: true, audio: false, mirror: !isMobile };
 
 function ledDots(id) {
   const p = LED_PATTERNS.find((x) => x.id === id);
@@ -157,7 +159,11 @@ function render() {
   fill(el,
     h('div', { class: 'section' },
       h('h2', {}, 'Sensors'),
-      err ? h('div', { class: 'callout bad' }, h('b', {}, 'Bluetooth unavailable. '), err) : null,
+      err ? h('div', { class: 'callout bad' }, h('b', {}, 'Bluetooth unavailable. '), err,
+        isIOS && !navigator.bluetooth ? [' ', h('a', { href: BLUEFY_APP_URL, target: '_blank', rel: 'noopener' }, 'Get Bluefy from the App Store'), ', then open ', h('b', {}, location.href.split('#')[0]), ' in it.'] : null) : null,
+      isBluefy ? h('div', { class: 'callout' }, h('b', {}, 'iPhone/iPad (Bluefy): '),
+        'keep Bluefy open with the screen on during a session. iOS pauses Bluetooth when the app is in the background or the screen locks; the app keeps the screen awake and marks any break in the data. ',
+        'If a sensor is not listed, use “Show all Bluetooth devices”. Sessions are kept in this browser: share them from Results (Save to Files, AirDrop).') : null,
       h('p', { class: 'muted' }, 'Charge each M40, snap in two fresh electrodes, press its button (LED pulses like a heartbeat), then add it here. Repeat for each sensor.'),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn primary', disabled: !!err, onclick: () => addBleSensor(false) }, '+ Add M40 sensor'),
@@ -210,7 +216,7 @@ function render() {
             h('div', { class: 'btn-row' },
               h('button', { class: 'btn' + (folder.handle ? '' : ' primary'), disabled: state.session?.active, onclick: () => chooseFolder().catch((e) => e.name !== 'AbortError' && toast(e.message, 'bad')) }, folder.handle ? 'Change folder…' : 'Choose save folder…'),
               folder.handle ? h('button', { class: 'btn ghost', disabled: state.session?.active, onclick: forgetFolder }, 'Use downloads instead') : null))
-        : h('p', { class: 'muted' }, 'This browser cannot write to a folder. Files will be offered as downloads.'),
+        : h('p', { class: 'muted' }, 'This browser cannot write to a folder. Each session is kept in this browser instead; share or download it from Results, or open it in Replay.'),
     ),
   );
   if (cam.stream) fillCameraList();
@@ -228,13 +234,14 @@ async function fillCameraList() {
 
 export async function startCam(deviceId) {
   try {
-    const stream = await openCamera({ deviceId, audio: camPrefs.audio });
+    const stream = await openCamera({ deviceId, audio: camPrefs.audio, facingMode: isMobile ? 'environment' : '' });
     const v = $('#camPreview');
     v.srcObject = stream;
     v.classList.toggle('unmirrored', !camPrefs.mirror);
     $('#camEmpty').hidden = true;
   } catch (err) {
-    toast('Camera: ' + err.message + ' (check macOS Settings → Privacy → Camera for Chrome)', 'bad', 8000);
+    const hint = isIOS ? 'allow camera access for this app in the iOS Settings app' : isMobile ? 'allow camera access for this site in the browser settings' : 'check macOS Settings → Privacy → Camera for Chrome';
+    toast(`Camera: ${err.message} (${hint})`, 'bad', 8000);
   }
   emit('camera');
 }

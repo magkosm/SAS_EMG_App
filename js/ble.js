@@ -8,34 +8,44 @@
 
 import { clock } from './state.js';
 import { withTimeout } from './util.js';
+import { isIOS, isBluefy } from './platform.js';
 
 export const ANR_COMPANY_ID = 0x05da;
-const SVC_AIO = 0x1815, CH_ANALOG = 0x2a58, CH_DIGITAL = 0x2a56;
-const SVC_BATT = 0x180f, CH_BATT = 0x2a19;
-const SVC_DIS = 0x180a;
-const DIS_CHARS = { model: 0x2a24, serial: 0x2a25, firmware: 0x2a26, hardware: 0x2a27, software: 0x2a28 };
+// Full 128-bit UUID strings: every Web Bluetooth implementation accepts them (Bluefy included),
+// while plain numbers are not handled everywhere.
+const uuid16 = (n) => `0000${n.toString(16).padStart(4, '0')}-0000-1000-8000-00805f9b34fb`;
+const SVC_AIO = uuid16(0x1815), CH_ANALOG = uuid16(0x2a58), CH_DIGITAL = uuid16(0x2a56);
+const SVC_BATT = uuid16(0x180f), CH_BATT = uuid16(0x2a19);
+const SVC_DIS = uuid16(0x180a);
+const DIS_CHARS = { model: uuid16(0x2a24), serial: uuid16(0x2a25), firmware: uuid16(0x2a26), hardware: uuid16(0x2a27), software: uuid16(0x2a28) };
 const OPTIONAL_SERVICES = [SVC_AIO, SVC_BATT, SVC_DIS];
 
 export function bleAvailability() {
-  if (!window.isSecureContext) return 'Open the app via http://localhost (not as a file) so Bluetooth is allowed.';
-  if (!navigator.bluetooth) return 'This browser has no Web Bluetooth. Use Google Chrome or Microsoft Edge on the Mac.';
+  if (!window.isSecureContext) return 'Open the app via https (the GitHub Pages site) or http://localhost, not as a file, so Bluetooth is allowed.';
+  if (!navigator.bluetooth) {
+    return isIOS
+      ? 'Safari and other iPhone/iPad browsers have no Bluetooth for web pages. Open this page in the Bluefy app instead.'
+      : 'This browser has no Web Bluetooth. Use Google Chrome or Microsoft Edge (computer or Android).';
+  }
   return null;
 }
 
+const NAME_FILTERS = [{ namePrefix: 'M40' }, { namePrefix: 'ANR' }, { namePrefix: 'Muscle' }];
+const MANUFACTURER_FILTER = { manufacturerData: [{ companyIdentifier: ANR_COMPANY_ID }] };
+
 // Must be called from a click handler (browser requires a user gesture per device).
-export function pickM40({ showAll = false } = {}) {
-  const options = showAll
-    ? { acceptAllDevices: true, optionalServices: OPTIONAL_SERVICES }
-    : {
-        filters: [
-          { manufacturerData: [{ companyIdentifier: ANR_COMPANY_ID }] },
-          { services: [SVC_AIO] },
-          { namePrefix: 'M40' },
-          { namePrefix: 'ANR' },
-        ],
-        optionalServices: OPTIONAL_SERVICES,
-      };
-  return navigator.bluetooth.requestDevice(options);
+// Bluefy does not handle the manufacturer-data filter (W3C web-bluetooth issue #624), so on iOS the
+// picker filters by service and name only; elsewhere it retries without it if the browser rejects it.
+export async function pickM40({ showAll = false } = {}) {
+  if (showAll) return navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: OPTIONAL_SERVICES });
+  const base = [{ services: [SVC_AIO] }, ...NAME_FILTERS];
+  const filters = isIOS || isBluefy ? base : [MANUFACTURER_FILTER, ...base];
+  try {
+    return await navigator.bluetooth.requestDevice({ filters, optionalServices: OPTIONAL_SERVICES });
+  } catch (err) {
+    if (err.name !== 'TypeError' || filters === base) throw err;
+    return navigator.bluetooth.requestDevice({ filters: base, optionalServices: OPTIONAL_SERVICES });
+  }
 }
 
 export async function rememberedDevices() {
@@ -126,7 +136,9 @@ export class M40Link extends EventTarget {
 
   setLed(pattern) {
     if (!this.digital) return Promise.resolve();
-    return this.#op(() => this.digital.writeValue(Uint8Array.of(pattern)));
+    const c = this.digital;
+    const data = Uint8Array.of(pattern);
+    return this.#op(() => (c.writeValueWithResponse ? c.writeValueWithResponse(data) : c.writeValue(data)));
   }
 
   readBattery() {

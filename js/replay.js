@@ -4,9 +4,11 @@
 // replay comments are saved as comments.csv in the session folder.
 
 import { state, on, emit } from './state.js';
-import { h, $, fmtNum, cssVar, toast, niceCeil, csvRow, downloadBlob } from './util.js';
+import { h, $, fmtNum, cssVar, toast, niceCeil, csvRow, downloadBlob, fmtBytes } from './util.js';
 import { folder, restoreFolder } from './folder.js';
 import { lowerBound } from './processing.js';
+import { listSessions, getSession, deleteSession, putFiles, filesOf, storageEstimate } from './store.js';
+import { canShareFiles, shareFiles } from './platform.js';
 
 const rv = {
   id: '',
@@ -135,7 +137,8 @@ async function pickFolder() {
   }
 }
 
-export async function loadFiles(files, dir = null) {
+// storeId: id of a session kept in this browser (store.js), so replay comments are saved back there.
+export async function loadFiles(files, dir = null, storeId = null) {
   const find = (name) => files.find((f) => f.name === name) || files.find((f) => f.name.endsWith('_' + name));
   const metaF = find('session.json');
   const samplesF = find('samples_long.csv');
@@ -151,6 +154,7 @@ export async function loadFiles(files, dir = null) {
     const videoF = (meta.video && find(meta.video.file)) || files.find((f) => /^video\//.test(f.type) || /\.(mp4|webm|mov)$/i.test(f.name));
     build(meta, parseCsv(await samplesF.text()), eventsF ? parseCsv(await eventsF.text()) : null, commentsF ? parseCsv(await commentsF.text()) : null);
     rv.dir = dir;
+    rv.storeId = storeId;
     await attachVideo(videoF, meta.video);
     showMain();
     return true;
@@ -171,7 +175,7 @@ export async function openRecordedSession(ss) {
       }
     } catch (err) { toast('Could not read the session folder: ' + err.message, 'bad'); }
   }
-  return loadFiles(files, ss.dir || null);
+  return loadFiles(files, ss.dir || null, !ss.dir && ss.storedInBrowser ? ss.id : null);
 }
 
 function build(meta, samples, events, commentRows) {
@@ -734,7 +738,7 @@ function buildComments() {
   $('#rvCommentCount').textContent = rv.comments.length ? `(${rv.comments.length})` : '';
   const host = $('#rvComments');
   const m = rv.meta;
-  const unsaved = rv.commentsDirty && !rv.dir;
+  const unsaved = rv.commentsDirty && !rv.dir && !rv.storeId;
   host.replaceChildren(...[
     m.notes ? h('div', { class: 'rv-comment session' }, h('div', { class: 'tiny' }, 'Session note'), h('div', {}, m.notes)) : null,
     rv.comments.length ? null : h('p', { class: 'tiny', style: { padding: '8px' } }, 'No comments yet. Pause where something happens and type a comment above the charts, or press C.'),
@@ -760,7 +764,7 @@ function buildInfo() {
     h('div', { class: 'tiny' }, h('b', {}, 'Started: '), started ? started.toLocaleString() : '–'),
     h('div', { class: 'tiny' }, h('b', {}, 'Duration: '), fmtT(rv.duration)),
     h('div', { class: 'tiny' }, h('b', {}, 'Video: '), rv.hasVideo ? `${m.video?.file} (starts at ${fmtNum(rv.vStart, 2)} s)` : 'none'),
-    h('div', { class: 'tiny' }, h('b', {}, 'Comments saved to: '), rv.dir ? `${rv.dir.name}/comments.csv` : 'not saved (loose files)'),
+    h('div', { class: 'tiny' }, h('b', {}, 'Comments saved to: '), rv.dir ? `${rv.dir.name}/comments.csv` : rv.storeId ? 'this browser (with the session)' : 'not saved (loose files)'),
     ...rv.sensors.map((s) => {
       const q = m.timing?.[s.key];
       const lostN = q ? q.lost : s.lost.reduce((a, l) => a + l.k, 0);
@@ -788,6 +792,18 @@ function commentsCsv() {
 }
 
 async function saveComments() {
+  if (!rv.dir && rv.storeId) {
+    try {
+      await putFiles(rv.storeId, { 'comments.csv': commentsCsv() });
+      rv.commentsDirty = false;
+    } catch (err) {
+      toast('Comment not saved in this browser: ' + err.message + '. Use “Download comments.csv”.', 'bad', 8000);
+      rv.storeId = null;
+      buildInfo();
+    }
+    buildComments();
+    return;
+  }
   if (!rv.dir) { buildComments(); return; }
   try {
     const opts = { mode: 'readwrite' };
@@ -934,38 +950,84 @@ export function onReplayShown() {
 
 // ---- Session list (remembered save folder) --------------------------------------------------------
 
-function showSessionList(sessions, title) {
-  const host = $('#rvRecent');
+function showSessionList(sessions, title, box = null) {
+  const host = box || $('#rvFolderSessions') || $('#rvRecent');
   host.replaceChildren(
     h('h3', { style: { marginTop: '18px' } }, title),
     h('div', { class: 'rv-session-list' }, sessions.slice(0, 60).map(({ name, hnd, meta }) =>
       h('button', { class: 'btn rv-session', onclick: () => openDir(hnd) },
         h('b', {}, meta.subject || name),
         h('span', {}, meta.started ? new Date(meta.started).toLocaleString() : name),
-        h('span', {}, `${fmtT(meta.duration_s)} · ${(meta.steps || []).filter((s) => !s.superseded).length} steps${meta.video ? ' · video' : ''}`)))),
+        h('span', {}, `${fmtT(meta.duration_s)} · ${((n) => `${n} step${n === 1 ? '' : 's'}`)((meta.steps || []).filter((s) => !s.superseded).length)}${meta.video ? ' · video' : ''}`)))),
   );
 }
 
 async function showRecent(requestAccess = false) {
-  await restoreFolder();
   const host = $('#rvRecent');
-  if (!folder.handle) { host.replaceChildren(); return; }
+  const browserBox = h('div', { id: 'rvBrowserSessions' });
+  const folderBox = h('div', { id: 'rvFolderSessions' });
+  host.replaceChildren(browserBox, folderBox);
+  renderBrowserSessions(browserBox);
+  await restoreFolder();
+  if (!folder.handle || !folderBox.isConnected) return;
   const opts = { mode: 'readwrite' };
   let perm = await folder.handle.queryPermission(opts);
   if (perm !== 'granted' && requestAccess) perm = await folder.handle.requestPermission(opts);
   if (perm !== 'granted') {
-    host.replaceChildren(h('div', { style: { marginTop: '18px' } },
+    folderBox.replaceChildren(h('div', { style: { marginTop: '18px' } },
       h('button', { class: 'btn primary', onclick: () => showRecent(true) }, `Show sessions in “${folder.name}”`)));
     return;
   }
   try {
     const sessions = await sessionDirsIn(folder.handle);
-    if (sessions.length) showSessionList(sessions, `Sessions in “${folder.name}”`);
-    else host.replaceChildren(h('p', { class: 'tiny', style: { marginTop: '18px' } }, `No sessions in “${folder.name}” yet.`));
+    if (sessions.length) showSessionList(sessions, `Sessions in “${folder.name}”`, folderBox);
+    else folderBox.replaceChildren(h('p', { class: 'tiny', style: { marginTop: '18px' } }, `No sessions in “${folder.name}” yet.`));
   } catch (err) {
-    host.replaceChildren(h('p', { class: 'tiny' }, 'Save folder not readable: ' + err.message));
+    folderBox.replaceChildren(h('p', { class: 'tiny' }, 'Save folder not readable: ' + err.message));
   }
 }
+
+// Sessions kept in this browser (store.js): open, share or delete.
+async function renderBrowserSessions(box) {
+  let list = [];
+  try { list = await listSessions(); } catch { /* storage unavailable */ }
+  if (!list.length) { box.replaceChildren(); return; }
+  const est = await storageEstimate();
+  const openStored = async (id) => {
+    const rec = await getSession(id);
+    if (!rec) { toast('That session is no longer in this browser.', 'bad'); renderBrowserSessions(box); return; }
+    await loadFiles(filesOf(rec), null, id);
+  };
+  const shareStored = async (id) => {
+    const rec = await getSession(id);
+    const files = Object.entries(rec.files).map(([n, b]) => new File([b], `${id}_${n}`, { type: b.type }));
+    if (!(await shareFiles(files, id).catch((e) => { toast('Share failed: ' + e.message, 'bad'); return true; })) && !canShareFiles(files)) {
+      files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 400));
+    }
+  };
+  const removeStored = async (id, label) => {
+    if (!confirm(`Delete “${label}” from this browser?\n\nOnly the copy in this browser is removed. Files you shared or downloaded are not affected.`)) return;
+    await deleteSession(id);
+    if (rv.storeId === id) rv.storeId = null;
+    renderBrowserSessions(box);
+  };
+  box.replaceChildren(...[
+    h('h3', { style: { marginTop: '18px' } }, 'Sessions in this browser'),
+    h('div', { class: 'rv-session-list' }, list.map((r) => {
+      const label = r.subject || r.id;
+      return h('div', { class: 'rv-stored' },
+        h('b', {}, label),
+        h('span', {}, r.started ? new Date(r.started).toLocaleString() : r.id),
+        h('span', {}, `${fmtT(r.duration)} · ${r.steps} step${r.steps === 1 ? '' : 's'}${r.hasVideo ? ' · video' : ''} · ${fmtBytes(r.bytes || 0)}${r.complete ? '' : ' · not finished (backup)'}`),
+        h('div', { class: 'btn-row' },
+          h('button', { class: 'btn small primary', onclick: () => openStored(r.id) }, 'Open'),
+          h('button', { class: 'btn small', onclick: () => shareStored(r.id) }, canShareFiles([new File([''], 'x.csv', { type: 'text/csv' })]) ? 'Share…' : 'Download'),
+          h('button', { class: 'btn small ghost', onclick: () => removeStored(r.id, label) }, 'Delete')));
+    })),
+    est?.quota ? h('p', { class: 'tiny', style: { marginTop: '6px' } }, `Browser storage used: ${fmtBytes(est.usage || 0)} of about ${fmtBytes(est.quota)}.`) : null,
+  ].filter(Boolean));
+}
+export { renderBrowserSessions };
 
 // ---- Wiring ----------------------------------------------------------------------------------------
 

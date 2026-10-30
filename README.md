@@ -19,12 +19,25 @@ The first time, macOS asks to let Chrome use Bluetooth and the camera. Allow bot
 | Device / browser | Record (Bluetooth + camera) | Replay & Analysis |
 |---|---|---|
 | Mac / Windows / Linux: Chrome or Edge | ✅ full, incl. saving straight to a folder | ✅ |
-| Android: Chrome | ✅ should work: Web Bluetooth and camera are supported. Files are downloaded at the end (Android has no folder picker). Untested with real M40s. | ✅ pick the session files with "Select files…" |
-| iPhone / iPad: Safari, Chrome, any browser | ❌ Apple allows no Web Bluetooth in any iOS browser | ✅ pick the files from the Files app |
-| iPhone / iPad: Bluefy (third-party browser with Web Bluetooth) | ⚠️ possibly; untested | ✅ |
+| Android: Chrome | ✅ should work (untested with real M40s). Sessions are kept in the browser; share them from Results | ✅ |
+| iPhone / iPad: **Bluefy** | ✅ supported (untested with real M40s, see below) | ✅ |
+| iPhone / iPad: Safari, Chrome, any other browser | ❌ Apple allows no Web Bluetooth there | ✅ pick the files from the Files app |
 | Safari or Firefox on a computer | ❌ no Web Bluetooth | ✅ |
 
-The layout adapts to phone width, but recording on a phone is cramped. A tablet in landscape is the better mobile option. Bluetooth and the camera need https (GitHub Pages) or localhost.
+The layout adapts to phone width, but recording on a phone is cramped. A tablet in landscape works better. Bluetooth and the camera need https (GitHub Pages) or localhost.
+
+### iPhone / iPad with Bluefy
+
+Install [Bluefy – Web BLE Browser](https://apps.apple.com/app/id1492822055), then open the site (`https://<user>.github.io/<repo>/`) in it.
+
+- **Finding sensors.** Bluefy ignores the manufacturer-data filter the app uses on computers ([W3C issue #624](https://lists.w3.org/Archives/Public/public-web-bluetooth-log/2024Apr/0008.html)). On iOS the picker therefore looks for the M40's Automation IO service and for names starting with M40, ANR or Muscle. If a sensor still doesn't appear, use **Show all Bluetooth devices**.
+- **Keep Bluefy in front with the screen on.** iOS pauses Bluetooth when the app goes to the background or the screen locks. The app asks to keep the screen awake during a session (where the browser allows it) and logs `app_hidden` / `app_visible` in `events.csv`, so gaps are visible.
+- **Camera.** Phones and tablets use the back camera by default (pointed at the patient). Whether Bluefy gives web pages camera access isn't documented; if it doesn't, the session records EMG only, and the app says so.
+- **Saving.** iOS has no folder access for web pages, so every session is **kept in the browser on the device**:
+  - The data is backed up every 30 s during the session, and the video is added at the end.
+  - From Results, **Share / Save to Files…** sends all files at once (Files, AirDrop, Mail), where the browser supports sharing; otherwise the files are offered as downloads.
+  - Replay and Analysis list **Sessions in this browser** to open, share or delete. Replay comments are saved back into that copy.
+  - Browser storage is limited, so delete sessions you have already exported. Video takes about 30 MB per minute.
 
 ## Workflow
 
@@ -188,6 +201,8 @@ If a sensor drops out, the app keeps reconnecting in the background. The gap app
 | `js/live.js` | Live strip charts and level tiles |
 | `js/replay.js` | Replay mode: synced video and EMG, markers, comments |
 | `js/folder.js` | Remembered save folder |
+| `js/store.js` | Sessions kept in the browser (phones, Bluefy, no save folder) |
+| `js/platform.js` | Device/browser detection, share sheet |
 | `serve.py` | Local server with caching off |
 | `tools/build_site.py` | Builds the version-stamped site for GitHub Pages |
 | `.github/workflows/pages.yml` | Publishes to GitHub Pages on push to main |
